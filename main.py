@@ -78,7 +78,7 @@ def main() -> None:
             service.restore_state(meta)
             spieler = service.alle_spieler()
             if spieler:
-                current_player_id = service.get_current_player_id() or spieler[0].id
+                current_player_id = service.aktueller_spieler_id() or spieler[0].id
                 next_player_name = next(
                     (p.name.name for p in spieler if p.id == current_player_id),
                     spieler[0].name.name,

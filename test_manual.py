@@ -9,7 +9,7 @@ from application.services import WuerfelspieleService
 from domain.aggregates import Wuerfelspiel
 from domain.entities import Wurf
 from domain.repositories import AbstractRepository
-from domain.value_objects import Augenzahl
+from domain.value_objects import Augenzahl, Spielername
 from infrastructure.repositories import (
     InMemoryWurfRepository,
     JsonWurfRepository,
@@ -21,11 +21,25 @@ from infrastructure.repositories import (
 # =============================================================================
 
 
-def make_service(random_fn=None) -> WuerfelspieleService:
-    """Creates a fresh in-memory service for each test."""
+def make_service(random_fn=None) -> tuple[WuerfelspieleService, str]:
+    """
+    Creates a fresh in-memory service with ONE registered player whose
+    turn order has already been started.
+
+    ARCHITECTURE: This game is multiplayer-only now — there is no
+    "anonymous throw" without a Spieler. Every test that just wants
+    "a service I can roll on" gets one default player set up for it.
+
+    Returns:
+        (service, spieler_id) — the service AND the ID of the player
+        who is currently up, so tests can call wuerfeln_fuer_spieler().
+    """
     spiel = Wuerfelspiel(random_fn=random_fn)
     repo = InMemoryWurfRepository()
-    return WuerfelspieleService(spiel=spiel, repository=repo)
+    service = WuerfelspieleService(spiel=spiel, repository=repo)
+    spieler = service.add_spieler("Tester")
+    service.starte_runde()
+    return service, spieler.id
 
 
 # =============================================================================
@@ -115,16 +129,20 @@ def test_wurf_entities_not_equal():
 def test_aggregate_always_returns_valid_range():
     """Every throw must return a value between 1 and 6."""
     spiel = Wuerfelspiel()
+    spieler = spiel.add_spieler(Spielername("Anna"))
+    spiel.starte_runde()
     for _ in range(1000):
-        wurf = spiel.wuerfeln()
+        wurf = spiel.wuerfeln_fuer_spieler(spieler.id)
         assert 1 <= wurf.augenzahl.wert <= 6
     print("  ✅ Wuerfelspiel: 1000 throws — all results in [1, 6]")
 
 
 def test_aggregate_emits_one_event_per_throw():
-    """One call to wuerfeln() must produce exactly one event."""
+    """One call to wuerfeln_fuer_spieler() must produce exactly one event."""
     spiel = Wuerfelspiel(random_fn=lambda: 6)
-    spiel.wuerfeln()
+    spieler = spiel.add_spieler(Spielername("Anna"))
+    spiel.starte_runde()
+    spiel.wuerfeln_fuer_spieler(spieler.id)
     events = spiel.pop_events()
     assert len(events) == 1, f"Expected 1 event, got {len(events)}"
     assert events[0].wurf.augenzahl.wert == 6
@@ -134,7 +152,9 @@ def test_aggregate_emits_one_event_per_throw():
 def test_aggregate_pop_events_clears_queue():
     """After pop_events(), the event list must be empty."""
     spiel = Wuerfelspiel(random_fn=lambda: 2)
-    spiel.wuerfeln()
+    spieler = spiel.add_spieler(Spielername("Anna"))
+    spiel.starte_runde()
+    spiel.wuerfeln_fuer_spieler(spieler.id)
     spiel.pop_events()  # first pop — returns 1 event
     events = spiel.pop_events()  # second pop — must be empty
     assert len(events) == 0, "Events must be cleared after pop"
@@ -144,8 +164,10 @@ def test_aggregate_pop_events_clears_queue():
 def test_aggregate_dependency_injection():
     """Injected random_fn must control the dice result (testability)."""
     spiel = Wuerfelspiel(random_fn=lambda: 4)
+    spieler = spiel.add_spieler(Spielername("Anna"))
+    spiel.starte_runde()
     for _ in range(10):
-        wurf = spiel.wuerfeln()
+        wurf = spiel.wuerfeln_fuer_spieler(spieler.id)
         assert wurf.augenzahl.wert == 4, "Deterministic fn must always return 4"
     print("  ✅ Wuerfelspiel: dependency injection works (always returns 4)")
 
@@ -232,18 +254,18 @@ def test_json_repository_is_persistent():
 
 
 def test_service_wuerfeln_saves_to_repository():
-    """After wuerfeln(), throw must be saved in repository."""
-    service = make_service(random_fn=lambda: 4)
-    service.wuerfeln()
+    """After wuerfeln_fuer_spieler(), throw must be saved in repository."""
+    service, spieler_id = make_service(random_fn=lambda: 4)
+    service.wuerfeln_fuer_spieler(spieler_id)
     assert service.gesamtwuerfe() == 1
-    print("  ✅ Service: throw is saved to repository after wuerfeln()")
+    print("  ✅ Service: throw is saved to repository after wuerfeln_fuer_spieler()")
 
 
 def test_service_can_roll_unlimited_times():
     """Game must impose no limit on number of rolls."""
-    service = make_service(random_fn=lambda: 3)
+    service, spieler_id = make_service(random_fn=lambda: 3)
     for i in range(10_000):
-        wurf = service.wuerfeln()
+        wurf = service.wuerfeln_fuer_spieler(spieler_id)
         assert wurf is not None
     assert service.gesamtwuerfe() == 10_000
     print("  ✅ Service: no limit on number of rolls (10,000 throws)")
@@ -256,9 +278,9 @@ def test_service_can_roll_unlimited_times():
 
 def test_ac1_result_always_between_1_and_6():
     """AC1: result must always be an integer between 1 and 6 inclusive."""
-    service = make_service()
+    service, spieler_id = make_service()
     for _ in range(1000):
-        wurf = service.wuerfeln()
+        wurf = service.wuerfeln_fuer_spieler(spieler_id)
         assert 1 <= wurf.augenzahl.wert <= 6
     print("  ✅ AC1: result always between 1 and 6")
 
@@ -270,10 +292,10 @@ def test_ac1_result_always_between_1_and_6():
 
 def test_ac_gesamtwuerfe_nach_drei_wuerfen():
     """AC: after 3 throws, total count must be exactly 3."""
-    service = make_service()
-    service.wuerfeln()
-    service.wuerfeln()
-    service.wuerfeln()
+    service, spieler_id = make_service()
+    service.wuerfeln_fuer_spieler(spieler_id)
+    service.wuerfeln_fuer_spieler(spieler_id)
+    service.wuerfeln_fuer_spieler(spieler_id)
     assert service.gesamtwuerfe() == 3
     print("  ✅ AC: total count is exactly 3 after 3 throws")
 
@@ -289,10 +311,10 @@ def test_ac_statistik_nach_6_6_1():
         index += 1
         return value
 
-    service = make_service(random_fn=next_value)
-    service.wuerfeln()  # 6
-    service.wuerfeln()  # 6
-    service.wuerfeln()  # 1
+    service, spieler_id = make_service(random_fn=next_value)
+    service.wuerfeln_fuer_spieler(spieler_id)  # 6
+    service.wuerfeln_fuer_spieler(spieler_id)  # 6
+    service.wuerfeln_fuer_spieler(spieler_id)  # 1
 
     stats = service.statistik()
     assert stats[6] == 2, f"Expected 6 to appear 2×, got {stats[6]}"
@@ -306,9 +328,9 @@ def test_ac_statistik_nach_6_6_1():
 
 def test_ac_gleichverteilung():
     """AC: uniform distribution over many throws (±5% tolerance)."""
-    service = make_service()
+    service, spieler_id = make_service()
     for _ in range(6000):
-        service.wuerfeln()
+        service.wuerfeln_fuer_spieler(spieler_id)
 
     stats = service.statistik()
     ideal = 6000 / 6  # 1000
@@ -316,9 +338,9 @@ def test_ac_gleichverteilung():
 
     for face, count in stats.items():
         deviation = abs(count - ideal)
-        assert deviation < tolerance, (
-            f"Face {face}: {count}×, deviation {deviation:.0f} > {tolerance:.0f}"
-        )
+        assert (
+            deviation < tolerance
+        ), f"Face {face}: {count}×, deviation {deviation:.0f} > {tolerance:.0f}"
     print("  ✅ AC: uniform distribution over 6000 throws (±5%)")
 
 
@@ -329,7 +351,7 @@ def test_ac_gleichverteilung():
 
 def test_ac_frischer_start():
     """AC: fresh start — all counters must be 0."""
-    service = make_service()
+    service, spieler_id = make_service()
     assert service.gesamtwuerfe() == 0
     stats = service.statistik()
     for face, count in stats.items():
@@ -351,10 +373,12 @@ def test_ac_json_datei_wird_erstellt():
     repo = JsonWurfRepository(filepath=test_file)
     spiel = Wuerfelspiel(random_fn=lambda: 3)
     service = WuerfelspieleService(spiel=spiel, repository=repo)
+    spieler = service.add_spieler("Tester")
+    service.starte_runde()
 
-    service.wuerfeln()
-    service.wuerfeln()
-    service.wuerfeln()
+    service.wuerfeln_fuer_spieler(spieler.id)
+    service.wuerfeln_fuer_spieler(spieler.id)
+    service.wuerfeln_fuer_spieler(spieler.id)
 
     assert os.path.exists(test_file), "JSON file must be created"
 
@@ -377,20 +401,24 @@ def test_ac_neues_spiel_startet_frisch():
     repo1 = JsonWurfRepository(filepath=test_file)
     spiel1 = Wuerfelspiel(random_fn=lambda: 4)
     service1 = WuerfelspieleService(spiel=spiel1, repository=repo1)
-    service1.wuerfeln()
-    service1.wuerfeln()
-    service1.wuerfeln()
+    spieler1 = service1.add_spieler("Tester")
+    service1.starte_runde()
+    service1.wuerfeln_fuer_spieler(spieler1.id)
+    service1.wuerfeln_fuer_spieler(spieler1.id)
+    service1.wuerfeln_fuer_spieler(spieler1.id)
     assert service1.gesamtwuerfe() == 3
 
     # session 2: must not see session 1 data
     repo2 = JsonWurfRepository(filepath=test_file)
     spiel2 = Wuerfelspiel(random_fn=lambda: 6)
     service2 = WuerfelspieleService(spiel=spiel2, repository=repo2)
-    service2.wuerfeln()
+    spieler2 = service2.add_spieler("Tester")
+    service2.starte_runde()
+    service2.wuerfeln_fuer_spieler(spieler2.id)
 
-    assert service2.gesamtwuerfe() == 1, (
-        f"New session must start with 1 throw, got {service2.gesamtwuerfe()}"
-    )
+    assert (
+        service2.gesamtwuerfe() == 1
+    ), f"New session must start with 1 throw, got {service2.gesamtwuerfe()}"
 
     os.remove(test_file)
     print("  ✅ AC: new session always starts fresh")
@@ -405,10 +433,9 @@ def test_ac2_format_wahl_json():
     repo = JsonWurfRepository(filepath=test_file)
     spiel = Wuerfelspiel(random_fn=lambda: 3)
     service = WuerfelspieleService(spiel=spiel, repository=repo)
-    service.wuerfeln()
-
-    assert os.path.exists(test_file)
-    assert test_file.endswith(".json")
+    spieler = service.add_spieler("Tester")
+    service.starte_runde()
+    service.wuerfeln_fuer_spieler(spieler.id)
     os.remove(test_file)
     print("  ✅ AC2: JSON format creates .json file")
 
@@ -422,7 +449,9 @@ def test_ac2_format_wahl_yaml():
     repo = YamlWurfRepository(filepath=test_file)
     spiel = Wuerfelspiel(random_fn=lambda: 3)
     service = WuerfelspieleService(spiel=spiel, repository=repo)
-    service.wuerfeln()
+    spieler = service.add_spieler("Tester")
+    service.starte_runde()
+    service.wuerfeln_fuer_spieler(spieler.id)
 
     assert os.path.exists(test_file)
     assert test_file.endswith(".yaml")
@@ -441,10 +470,12 @@ def test_ac_xml_datei_wird_erstellt():
     repo = XmlWurfRepository(filepath=test_file)
     spiel = Wuerfelspiel(random_fn=lambda: 3)
     service = WuerfelspieleService(spiel=spiel, repository=repo)
+    spieler = service.add_spieler("Tester")
+    service.starte_runde()
 
-    service.wuerfeln()
-    service.wuerfeln()
-    service.wuerfeln()
+    service.wuerfeln_fuer_spieler(spieler.id)
+    service.wuerfeln_fuer_spieler(spieler.id)
+    service.wuerfeln_fuer_spieler(spieler.id)
 
     assert os.path.exists(test_file), "XML file must be created"
 
@@ -472,9 +503,11 @@ def test_ac_xml_laden():
     repo1 = XmlWurfRepository(filepath=test_file)
     spiel1 = Wuerfelspiel(random_fn=lambda: 5)
     service1 = WuerfelspieleService(spiel=spiel1, repository=repo1)
-    service1.wuerfeln()
-    service1.wuerfeln()
-    service1.wuerfeln()
+    spieler1 = service1.add_spieler("Tester")
+    service1.starte_runde()
+    service1.wuerfeln_fuer_spieler(spieler1.id)
+    service1.wuerfeln_fuer_spieler(spieler1.id)
+    service1.wuerfeln_fuer_spieler(spieler1.id)
     assert service1.gesamtwuerfe() == 3
 
     # session 2: load existing file
@@ -483,9 +516,9 @@ def test_ac_xml_laden():
     spiel2 = Wuerfelspiel(random_fn=lambda: 2)
     service2 = WuerfelspieleService(spiel=spiel2, repository=repo2)
 
-    assert service2.gesamtwuerfe() == 3, (
-        f"Should load 3 existing throws, got {service2.gesamtwuerfe()}"
-    )
+    assert (
+        service2.gesamtwuerfe() == 3
+    ), f"Should load 3 existing throws, got {service2.gesamtwuerfe()}"
 
     os.remove(test_file)
     print("  ✅ AC XML: existing XML file loads correctly on restart")

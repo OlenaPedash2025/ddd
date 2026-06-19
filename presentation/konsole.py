@@ -37,7 +37,8 @@ class KonsolenUI:
         2. Ask how many players
         3. Ask for each player's name (with validation)
         4. Register players in the service
-        5. Run game loop with player rotation
+        5. Run game loop — turn order is now owned by the Aggregate;
+           the UI just asks "who is up?" and reacts.
         """
         self._zeige_willkommen()
 
@@ -47,7 +48,6 @@ class KonsolenUI:
             anzahl = self.frage_anzahl_spieler()
             rundenlimit = self.frage_rundenlimit()
             self._service.set_round_limit(rundenlimit)
-            self._service.set_current_round(1)
 
             # Step 2: Ask for names of all players
             namen = self.frage_spielernamen(anzahl)
@@ -58,13 +58,12 @@ class KonsolenUI:
                 p = self._service.add_spieler(name)
                 spieler.append(p)
 
-            self._service.set_current_player_id(spieler[0].id)
+            # Step 4: turn order starts now — Aggregate picks the first player
+            self._service.starte_runde()
 
             print(f"\n✅ Game set! {anzahl} player(s) ready:")
             for i, p in enumerate(spieler, 1):
                 print(f"   {i}. {p.name.name}")
-
-            spieler_index = 0
         else:
             print(f"\n✅ Loaded saved game with {len(spieler)} player(s):")
             for i, p in enumerate(spieler, 1):
@@ -80,37 +79,32 @@ class KonsolenUI:
             print(f"\n🔢 Round limit: {rundenlimit}")
             print(f"🔄 Runde {aktueller_runde} / {rundenlimit}")
 
-            current_player_id = self._service.get_current_player_id() or spieler[0].id
-            spieler_index = next(
-                (index for index, p in enumerate(spieler) if p.id == current_player_id),
-                0,
+            if self._service.aktueller_spieler_id() is None:
+                self._service.starte_runde()
+
+            naechster_name = self._spieler_name_by_id(
+                spieler, self._service.aktueller_spieler_id()
             )
-            print(f"\n👉 Next turn: {spieler[spieler_index].name.name}")
+            print(f"\n👉 Next turn: {naechster_name}")
 
         while True:
-            if (
-                self._service.get_round_limit() is not None
-                and self._service.get_current_round() > self._service.get_round_limit()
-            ):
+            if self._service.ist_spiel_beendet():
                 self._zeige_abschluss()
                 break
 
-            aktueller_spieler = spieler[spieler_index]
+            aktuelle_id = self._service.aktueller_spieler_id()
+            aktueller_spieler = next(p for p in spieler if p.id == aktuelle_id)
             self._zeige_zuginfo(aktueller_spieler.name.name)
 
             # Ask the current player if they want to roll
             antwort = self._frage_ob_spieler_wuerfeln(aktueller_spieler.name.name)
 
             if not antwort:
-                # Current player declines — move to next player
-                spieler_index = (spieler_index + 1) % len(spieler)
-                if spieler_index == 0:
-                    self._service.set_current_round(
-                        self._service.get_current_round() + 1
-                    )
-                self._service.set_current_player_id(spieler[spieler_index].id)
+                # Current player declines — Aggregate advances the turn
+                war_letzter_im_kreis = self._ist_letzter_spieler(spieler, aktuelle_id)
+                self._service.spieler_aussetzen()
 
-                if spieler_index == 0:
+                if war_letzter_im_kreis:
                     # We cycled through all players once without anyone wanting to play
                     # Ask if they want to continue or stop
                     antwort_fortfahren = self._frage_ob_weitermachen()
@@ -119,17 +113,26 @@ class KonsolenUI:
                         break
                 continue
 
-            # Current player wants to roll
+            # Current player wants to roll — Aggregate advances the turn itself
             wurf = self._service.wuerfeln_fuer_spieler(aktueller_spieler.id)
 
             # Display result
             self._zeige_ergebnis(aktueller_spieler.name.name, wurf.augenzahl.wert)
 
-            # Move to next player
-            spieler_index = (spieler_index + 1) % len(spieler)
-            if spieler_index == 0:
-                self._service.set_current_round(self._service.get_current_round() + 1)
-            self._service.set_current_player_id(spieler[spieler_index].id)
+    def _spieler_name_by_id(self, spieler: list, spieler_id: str | None) -> str:
+        """Look up a player's display name by ID — small UI helper."""
+        gefunden = next((p for p in spieler if p.id == spieler_id), None)
+        return gefunden.name.name if gefunden else "?"
+
+    def _ist_letzter_spieler(self, spieler: list, spieler_id: str | None) -> bool:
+        """
+        True if spieler_id is the last player in registration order —
+        used only to decide when to ask "continue?" after a full pass
+        of everyone declining. Pure UI bookkeeping, not a domain rule.
+        """
+        if not spieler:
+            return False
+        return spieler[-1].id == spieler_id
 
     def _zeige_willkommen(self) -> None:
         """Print welcome banner — called exactly once."""
@@ -138,29 +141,6 @@ class KonsolenUI:
         print("=" * 45)
         print("  Roll as many times as you like!")
         print("=" * 45)
-
-    def _frage_ob_wuerfeln(self) -> bool:
-        """
-        Ask whether the player wants to roll.
-        Loops until valid input is given — no crashes on typos.
-
-        Returns:
-            True if player wants to roll, False if they want to stop.
-        """
-        while True:
-            try:
-                eingabe = input("\n🎲 Roll the dice? (j/n): ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                # handle Ctrl+C and Ctrl+D gracefully
-                print("\n\nGame interrupted. Bye!")
-                return False
-
-            if eingabe in ("j", "y"):
-                return True
-            elif eingabe in ("n"):
-                return False
-            else:
-                print("  ⚠️  Please enter 'j' (yes) or 'n' (no).")
 
     def _frage_ob_spieler_wuerfeln(self, spieler_name: str) -> bool:
         """

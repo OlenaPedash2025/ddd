@@ -8,6 +8,18 @@ __pycache__/
 
 # VS Code
 .vscode/
+.history/
 
 # Mac
 .DS_Store
+
+# Files
+*.log
+*.csv
+*.json
+*.yaml
+*.xml
+*.xlsx
+*.zip
+*.tar.gz
+*.bak

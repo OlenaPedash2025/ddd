@@ -10,10 +10,12 @@ class WuerfelspieleService:
     """
     Application Service: orchestrates the game flow.
 
-    NEW ARCHITECTURE (Multi-player support):
-    - Manages the collection of players
-    - Orchestrates throws for specific players
-    - Persists all throws to repository
+    ARCHITECTURE (after turn-order refactor):
+    - Turn order, round limit, and current round are NOT stored here anymore.
+      They live on the Aggregate (Wuerfelspiel) — it is the single source
+      of truth and the only place that enforces "whose turn is it".
+    - This Service is a thin coordinator: it calls the Aggregate, then
+      reacts to what happened (persists throws, syncs metadata).
 
     Knows about:
     - Domain Aggregate (Wuerfelspiel) — owns all game state
@@ -33,9 +35,27 @@ class WuerfelspieleService:
     ):
         self._spiel = spiel
         self._repository = repository
-        self._current_player_id: str | None = None
-        self._round_limit: int | None = None
-        self._current_round: int = 1
+
+    def _sync_meta(self) -> None:
+        """
+        Push the Aggregate's current state into the repository's metadata.
+        Called after any operation that changes players, turn order, or
+        round state — keeps the save file always up to date.
+        """
+        if not self._repository.ist_persistent():
+            return
+
+        self._repository.set_meta(
+            {
+                "players": [
+                    {"id": spieler.id, "name": spieler.name.name}
+                    for spieler in self._spiel.alle_spieler()
+                ],
+                "next_player_id": self._spiel.aktueller_spieler_id(),
+                "round_limit": self._spiel.get_round_limit(),
+                "current_round": self._spiel.aktuelle_runde(),
+            }
+        )
 
     def add_spieler(self, name: str) -> Spieler:
         """
@@ -55,16 +75,7 @@ class WuerfelspieleService:
         """
         spielername = Spielername(name)  # Validate in domain layer
         spieler = self._spiel.add_spieler(spielername)
-        if self._repository.ist_persistent():
-            self._repository.set_meta(
-                {
-                    "players": [
-                        {"id": p.id, "name": p.name.name}
-                        for p in self._spiel.alle_spieler()
-                    ],
-                    "next_player_id": self._current_player_id,
-                }
-            )
+        self._sync_meta()
         return spieler
 
     def alle_spieler(self) -> list[Spieler]:
@@ -76,98 +87,74 @@ class WuerfelspieleService:
         """
         return self._spiel.alle_spieler()
 
-    def set_current_player_id(self, spieler_id: str | None) -> None:
+    def starte_runde(self) -> None:
         """
-        Persist the current next player ID so a loaded game can continue correctly.
+        Start the turn order — the first registered player becomes current.
+        Must be called once after all players are registered (Variant A:
+        explicit start, see Wuerfelspiel.starte_runde docstring).
         """
-        self._current_player_id = spieler_id
-        if self._repository.ist_persistent():
-            self._repository.set_meta(
-                {
-                    "players": [
-                        {"id": spieler.id, "name": spieler.name.name}
-                        for spieler in self._spiel.alle_spieler()
-                    ],
-                    "next_player_id": spieler_id,
-                    "round_limit": self._round_limit,
-                    "current_round": self._current_round,
-                }
-            )
+        self._spiel.starte_runde()
+        self._sync_meta()
 
-    def get_current_player_id(self) -> str | None:
-        """Return the currently saved next player ID."""
-        return self._current_player_id
+    def aktueller_spieler_id(self) -> str | None:
+        """Return the ID of the player whose turn it currently is."""
+        return self._spiel.aktueller_spieler_id()
 
     def set_round_limit(self, round_limit: int | None) -> None:
-        """Store the round limit and persist it if the repository is persistent."""
-        self._round_limit = round_limit
-        if self._repository.ist_persistent():
-            self._repository.set_meta(
-                {
-                    "players": [
-                        {"id": spieler.id, "name": spieler.name.name}
-                        for spieler in self._spiel.alle_spieler()
-                    ],
-                    "next_player_id": self._current_player_id,
-                    "round_limit": self._round_limit,
-                    "current_round": self._current_round,
-                }
-            )
+        """Configure how many rounds the game runs (delegates to Aggregate)."""
+        self._spiel.set_round_limit(round_limit)
+        self._sync_meta()
 
     def get_round_limit(self) -> int | None:
         """Return the configured round limit, or None when unlimited."""
-        return self._round_limit
-
-    def set_current_round(self, current_round: int) -> None:
-        """Update the current round counter and persist metadata."""
-        self._current_round = current_round
-        if self._repository.ist_persistent():
-            self._repository.set_meta(
-                {
-                    "players": [
-                        {"id": spieler.id, "name": spieler.name.name}
-                        for spieler in self._spiel.alle_spieler()
-                    ],
-                    "next_player_id": self._current_player_id,
-                    "round_limit": self._round_limit,
-                    "current_round": self._current_round,
-                }
-            )
+        return self._spiel.get_round_limit()
 
     def get_current_round(self) -> int:
-        """Return the current round, defaulting to 1."""
-        return self._current_round or 1
+        """Return the current round (delegates to Aggregate)."""
+        return self._spiel.aktuelle_runde()
+
+    def ist_spiel_beendet(self) -> bool:
+        """True if the configured round limit has been reached."""
+        return self._spiel.ist_spiel_beendet()
+
+    def spieler_aussetzen(self) -> None:
+        """
+        Current player skips their turn. Turn order still advances —
+        delegates to the Aggregate, which owns this invariant.
+        """
+        self._spiel.spieler_aussetzen()
+        self._sync_meta()
 
     def restore_state(self, meta: dict) -> None:
         """
         Restore game state from loaded repository metadata.
 
         Args:
-            meta: metadata dictionary with players and next_player_id
+            meta: metadata dictionary with players, next_player_id,
+                  round_limit, and current_round.
         """
         players = meta.get("players", []) or []
         throws = self._repository.alle()
         if players:
-            self._spiel.load_state(players, throws)
-            self._current_player_id = meta.get("next_player_id")
-            self._round_limit = meta.get("round_limit")
-            self._current_round = meta.get("current_round") or (
-                self._repository.anzahl() // len(players) + 1 if players else 1
+            self._spiel.load_state(
+                players,
+                throws,
+                next_player_id=meta.get("next_player_id"),
+                round_limit=meta.get("round_limit"),
+                current_round=meta.get("current_round")
+                or (self._repository.anzahl() // len(players) + 1),
             )
-        else:
-            self._current_player_id = None
-            self._round_limit = None
-            self._current_round = 1
 
     def wuerfeln_fuer_spieler(self, spieler_id: str) -> Wurf:
         """
         Execute the "roll the dice" use case for a specific player.
 
         ARCHITECTURE:
-        1. Aggregate performs the throw (domain logic)
+        1. Aggregate performs the throw AND advances turn order (domain logic)
         2. Collect Domain Events from the Aggregate
         3. React to each event — save the throw to repository
-        4. Return the result to the Presentation Layer
+        4. Sync metadata (next player / round may have changed)
+        5. Return the result to the Presentation Layer
 
         Args:
             spieler_id: Which player is throwing.
@@ -176,9 +163,9 @@ class WuerfelspieleService:
             The newly created Wurf entity.
 
         Raises:
-            ValueError: If spieler_id doesn't exist.
+            ValueError: If spieler_id doesn't exist, or it isn't their turn.
         """
-        # step 1: domain does all the work
+        # step 1: domain does all the work, including advancing the turn
         wurf = self._spiel.wuerfeln_fuer_spieler(spieler_id)
 
         # step 2: collect events — aggregate's mailbox is cleared after this
@@ -188,8 +175,27 @@ class WuerfelspieleService:
         for event in events:
             self._repository.speichern(event.wurf)
 
-        # step 4: return to caller
+        # step 4: turn/round may have changed — keep save file in sync
+        self._sync_meta()
+
+        # step 5: return to caller
         return wurf
+
+    def wuerfeln(self) -> Wurf:
+        """
+        Convenience method for single-player / legacy usage: roll for
+        whichever player is currently up. Requires starte_runde() to have
+        been called and exactly the current player to roll.
+
+        Raises:
+            ValueError: If no turn order has been started yet.
+        """
+        spieler_id = self._spiel.aktueller_spieler_id()
+        if spieler_id is None:
+            raise ValueError(
+                "Es ist kein Spieler am Zug. Bitte zuerst starte_runde() aufrufen."
+            )
+        return self.wuerfeln_fuer_spieler(spieler_id)
 
     def statistik(self) -> dict[int, int]:
         """
