@@ -91,5 +91,8 @@ class Spieler:
             stats[wurf.augenzahl.wert] += 1
         return stats
 
+    def punkte(self) -> int:
+        return sum(wurf.augenzahl.wert for wurf in self.wuerfe)
+
     def __repr__(self):
         return f"Spieler(name={self.name.name}, throws={self.anzahl_wuerfe()})"

@@ -326,6 +326,18 @@ def test_ac_statistik_nach_6_6_1():
     print("  ✅ AC: statistik correctly shows 6×2, 1×1, rest 0")
 
 
+def test_ac_punkte_berechnung():
+    """AC: points calculation must be correct after a series of throws."""
+    service, spieler_id = make_service(random_fn=lambda: 4)
+
+    for _ in range(3):
+        service.wuerfeln_fuer_spieler(spieler_id)  # 3 throws of 4
+
+    punkte = service.punkte_fuer_spieler(spieler_id)
+    assert punkte == 12, f"Expected 12 points, got {punkte}"
+    print("  ✅ AC: points calculation is correct after series of throws")
+
+
 def test_ac_gleichverteilung():
     """AC: uniform distribution over many throws (±5% tolerance)."""
     service, spieler_id = make_service()
@@ -619,6 +631,7 @@ if __name__ == "__main__":
         ("AC XML — file loads", test_ac_xml_laden),
         ("AC Zeitstempel — unique filenames", test_ac_zeitstempel_im_dateinamen),
         ("AC Finder — finds and sorts files", test_ac_spielstand_finder_findet_dateien),
+        ("AC Punkte — correct calculation", test_ac_punkte_berechnung),
     ]
 
     print("\n🧪 Running all tests...\n")

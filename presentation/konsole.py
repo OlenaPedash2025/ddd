@@ -23,10 +23,15 @@ class KonsolenUI:
     BAR_MAX_WIDTH = 30
 
     def __init__(self, service: WuerfelspieleService | None = None):
-        self._service = service
+        self._service: WuerfelspieleService | None = service
 
     def set_service(self, service: WuerfelspieleService) -> None:
         self._service = service
+
+    def _require_service(self) -> WuerfelspieleService:
+        if self._service is None:
+            raise RuntimeError("KonsolenUI requires a service before it can run.")
+        return self._service
 
     def starten(self) -> None:
         """
@@ -40,14 +45,15 @@ class KonsolenUI:
         5. Run game loop — turn order is now owned by the Aggregate;
            the UI just asks "who is up?" and reacts.
         """
+        service = self._require_service()
         self._zeige_willkommen()
 
-        spieler = self._service.alle_spieler()
+        spieler = service.alle_spieler()
         if not spieler:
             # Step 1: Ask how many players
             anzahl = self.frage_anzahl_spieler()
             rundenlimit = self.frage_rundenlimit()
-            self._service.set_round_limit(rundenlimit)
+            service.set_round_limit(rundenlimit)
 
             # Step 2: Ask for names of all players
             namen = self.frage_spielernamen(anzahl)
@@ -55,11 +61,11 @@ class KonsolenUI:
             # Step 3: Register players in the service (Aggregate)
             spieler = []
             for name in namen:
-                p = self._service.add_spieler(name)
+                p = service.add_spieler(name)
                 spieler.append(p)
 
             # Step 4: turn order starts now — Aggregate picks the first player
-            self._service.starte_runde()
+            service.starte_runde()
 
             print(f"\n✅ Game set! {anzahl} player(s) ready:")
             for i, p in enumerate(spieler, 1):
@@ -69,30 +75,30 @@ class KonsolenUI:
             for i, p in enumerate(spieler, 1):
                 print(f"   {i}. {p.name.name}")
 
-            if self._service.get_round_limit() is None:
+            if service.get_round_limit() is None:
                 rundenlimit = self.frage_rundenlimit()
-                self._service.set_round_limit(rundenlimit)
+                service.set_round_limit(rundenlimit)
             else:
-                rundenlimit = self._service.get_round_limit()
+                rundenlimit = service.get_round_limit()
 
-            aktueller_runde = self._service.get_current_round()
+            aktueller_runde = service.get_current_round()
             print(f"\n🔢 Round limit: {rundenlimit}")
             print(f"🔄 Runde {aktueller_runde} / {rundenlimit}")
 
-            if self._service.aktueller_spieler_id() is None:
-                self._service.starte_runde()
+            if service.aktueller_spieler_id() is None:
+                service.starte_runde()
 
             naechster_name = self._spieler_name_by_id(
-                spieler, self._service.aktueller_spieler_id()
+                spieler, service.aktueller_spieler_id()
             )
             print(f"\n👉 Next turn: {naechster_name}")
 
         while True:
-            if self._service.ist_spiel_beendet():
+            if service.ist_spiel_beendet():
                 self._zeige_abschluss()
                 break
 
-            aktuelle_id = self._service.aktueller_spieler_id()
+            aktuelle_id = service.aktueller_spieler_id()
             aktueller_spieler = next(p for p in spieler if p.id == aktuelle_id)
             self._zeige_zuginfo(aktueller_spieler.name.name)
 
@@ -102,7 +108,7 @@ class KonsolenUI:
             if not antwort:
                 # Current player declines — Aggregate advances the turn
                 war_letzter_im_kreis = self._ist_letzter_spieler(spieler, aktuelle_id)
-                self._service.spieler_aussetzen()
+                service.spieler_aussetzen()
 
                 if war_letzter_im_kreis:
                     # We cycled through all players once without anyone wanting to play
@@ -114,7 +120,7 @@ class KonsolenUI:
                 continue
 
             # Current player wants to roll — Aggregate advances the turn itself
-            wurf = self._service.wuerfeln_fuer_spieler(aktueller_spieler.id)
+            wurf = service.wuerfeln_fuer_spieler(aktueller_spieler.id)
 
             # Display result
             self._zeige_ergebnis(aktueller_spieler.name.name, wurf.augenzahl.wert)
@@ -294,8 +300,9 @@ class KonsolenUI:
         """
         Display the current round and current player before each turn.
         """
-        current_round = self._service.get_current_round()
-        round_limit = self._service.get_round_limit()
+        service = self._require_service()
+        current_round = service.get_current_round()
+        round_limit = service.get_round_limit()
         limit_text = str(round_limit) if round_limit is not None else "∞"
         print(f"\n🔄 Runde {current_round} / {limit_text}")
         print(f"👉 {spieler_name} ist jetzt dran.")
@@ -309,8 +316,9 @@ class KonsolenUI:
         - each face shows correct frequency
         - output is human-readable, not a raw data object
         """
-        gesamt = self._service.gesamtwuerfe()
-        stats = self._service.statistik()
+        service = self._require_service()
+        gesamt = service.gesamtwuerfe()
+        stats = service.statistik()
 
         # find the highest count to scale the bars proportionally
         # if nobody has thrown yet, avoid division by zero
@@ -338,20 +346,37 @@ class KonsolenUI:
 
     def _zeige_abschluss(self) -> None:
         """
-        Display final statistics.
-        Acceptance Criterion 2: verify uniform distribution.
+        Display final ranking and statistics.
         """
-        gesamt = self._service.gesamtwuerfe()
+        service = self._require_service()
+        gesamt = service.gesamtwuerfe()
 
         if gesamt == 0:
             print("\n  No throws made. Come back soon! 👋")
             return
 
-        stats = self._service.statistik()
-        max_count = max(stats.values())
-
-        if self._service.ist_persistent():
+        if service.ist_persistent():
             print("\n  💾 Your game has been saved to spielstand.json")
+
+        # --- Ranking ---
+        spielers = service.alle_spieler()
+        spielers.sort(key=lambda s: service.punkte_fuer_spieler(s.id), reverse=True)
+
+        print("\n" + "=" * 45)
+        print("  🏆  FINAL RANKING")
+        print("=" * 45)
+
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        for rang, spieler in enumerate(spielers, start=1):
+            punkte = service.punkte_fuer_spieler(spieler.id)
+            medal = medals.get(rang, "  ")
+            print(f"  {rang}. {medal} {spieler.name.name:<15} — {punkte:>4} pts")
+
+        print("=" * 45)
+
+        # --- Dice statistics ---
+        stats = service.statistik()
+        max_count = max(stats.values())
 
         print("\n" + "=" * 45)
         print(f"  📊  STATISTICS after {gesamt} throw(s)")
@@ -360,7 +385,6 @@ class KonsolenUI:
         for face in range(1, 7):
             count = stats[face]
             symbol = self.DICE_FACES[face]
-            # scale bar width relative to the most frequent face
             bar_width = int((count / max_count) * self.BAR_MAX_WIDTH)
             bar = self.BAR_CHAR * bar_width
             percentage = count / gesamt * 100

@@ -228,6 +228,19 @@ class WuerfelspieleService:
 
         return spieler.statistik()
 
+    def punkte_fuer_spieler(self, spieler_id: str) -> int:
+        """
+        Compute total points for a specific player.
+
+        Returns:
+            Total points (sum of all throw values) for the player.
+        """
+        spieler = self._spiel.get_spieler(spieler_id)
+        if spieler is None:
+            raise ValueError(f"Spieler mit ID {spieler_id} nicht gefunden.")
+
+        return spieler.punkte()
+
     def gesamtwuerfe(self) -> int:
         """Return total number of throws in this session."""
         return self._repository.anzahl()
