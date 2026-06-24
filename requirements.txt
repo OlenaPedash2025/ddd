@@ -4,3 +4,4 @@ pluggy==1.6.0
 Pygments==2.20.0
 pytest==9.1.0
 PyYAML==6.0.3
+rich

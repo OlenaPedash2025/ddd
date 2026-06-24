@@ -2,22 +2,11 @@
 
 from application.services import WuerfelspieleService
 from domain.value_objects import AnzahlSpieler, Spielername
+from rich.console import Console
 
 
 class KonsolenUI:
-    """
-    Presentation Layer: text-based user interface in the terminal.
-
-    Knows about:
-    - WuerfelspieleService (calls it for all game operations)
-
-    Does NOT know about:
-    - Domain objects directly (never creates Wurf or Augenzahl)
-    - Repositories (never touches storage)
-    - Business rules (never validates dice values)
-    """
-
-    # dice face symbols — purely visual, lives here in presentation
+    console = Console()
     DICE_FACES = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
     BAR_CHAR = "█"
     BAR_MAX_WIDTH = 30
@@ -50,30 +39,30 @@ class KonsolenUI:
 
         spieler = service.alle_spieler()
         if not spieler:
-            # Step 1: Ask how many players
             anzahl = self.frage_anzahl_spieler()
             rundenlimit = self.frage_rundenlimit()
             service.set_round_limit(rundenlimit)
 
-            # Step 2: Ask for names of all players
             namen = self.frage_spielernamen(anzahl)
 
-            # Step 3: Register players in the service (Aggregate)
             spieler = []
             for name in namen:
                 p = service.add_spieler(name)
                 spieler.append(p)
 
-            # Step 4: turn order starts now — Aggregate picks the first player
             service.starte_runde()
 
-            print(f"\n✅ Game set! {anzahl} player(s) ready:")
+            self.console.print(
+                f"\n[bold green]✅ Game set! {anzahl} player(s) ready:[/bold green]"
+            )
             for i, p in enumerate(spieler, 1):
-                print(f"   {i}. {p.name.name}")
+                self.console.print(f"   {i}. {p.name.name}")
         else:
-            print(f"\n✅ Loaded saved game with {len(spieler)} player(s):")
+            self.console.print(
+                f"\n[bold green]✅ Loaded saved game with {len(spieler)} player(s):[/bold green]"
+            )
             for i, p in enumerate(spieler, 1):
-                print(f"   {i}. {p.name.name}")
+                self.console.print(f"   {i}. {p.name.name}")
 
             if service.get_round_limit() is None:
                 rundenlimit = self.frage_rundenlimit()
@@ -82,8 +71,8 @@ class KonsolenUI:
                 rundenlimit = service.get_round_limit()
 
             aktueller_runde = service.get_current_round()
-            print(f"\n🔢 Round limit: {rundenlimit}")
-            print(f"🔄 Runde {aktueller_runde} / {rundenlimit}")
+            self.console.print(f"\n🔢 Round limit: {rundenlimit}")
+            self.console.print(f"🔄 Runde {aktueller_runde} / {rundenlimit}")
 
             if service.aktueller_spieler_id() is None:
                 service.starte_runde()
@@ -91,7 +80,9 @@ class KonsolenUI:
             naechster_name = self._spieler_name_by_id(
                 spieler, service.aktueller_spieler_id()
             )
-            print(f"\n👉 Next turn: {naechster_name}")
+            self.console.print(
+                f"\n[bold cyan]👉 Next turn: {naechster_name}[/bold cyan]"
+            )
 
         while True:
             if service.ist_spiel_beendet():
@@ -102,27 +93,20 @@ class KonsolenUI:
             aktueller_spieler = next(p for p in spieler if p.id == aktuelle_id)
             self._zeige_zuginfo(aktueller_spieler.name.name)
 
-            # Ask the current player if they want to roll
             antwort = self._frage_ob_spieler_wuerfeln(aktueller_spieler.name.name)
 
             if not antwort:
-                # Current player declines — Aggregate advances the turn
                 war_letzter_im_kreis = self._ist_letzter_spieler(spieler, aktuelle_id)
                 service.spieler_aussetzen()
 
                 if war_letzter_im_kreis:
-                    # We cycled through all players once without anyone wanting to play
-                    # Ask if they want to continue or stop
                     antwort_fortfahren = self._frage_ob_weitermachen()
                     if not antwort_fortfahren:
                         self._zeige_abschluss()
                         break
                 continue
 
-            # Current player wants to roll — Aggregate advances the turn itself
             wurf = service.wuerfeln_fuer_spieler(aktueller_spieler.id)
-
-            # Display result
             self._zeige_ergebnis(aktueller_spieler.name.name, wurf.augenzahl.wert)
 
     def _spieler_name_by_id(self, spieler: list, spieler_id: str | None) -> str:
@@ -142,19 +126,17 @@ class KonsolenUI:
 
     def _zeige_willkommen(self) -> None:
         """Print welcome banner — called exactly once."""
-        print("\n" + "=" * 45)
-        print("       🎲  W Ü R F E L S P I E L  🎲")
-        print("=" * 45)
-        print("  Roll as many times as you like!")
-        print("=" * 45)
+        self.console.print("\n" + "=" * 45)
+        self.console.print(
+            "[bold yellow]       🎲  W Ü R F E L S P I E L  🎲[/bold yellow]"
+        )
+        self.console.print("=" * 45)
+        self.console.print("  Roll as many times as you like!")
+        self.console.print("=" * 45)
 
     def _frage_ob_spieler_wuerfeln(self, spieler_name: str) -> bool:
         """
         Ask a specific player if they want to roll.
-        Loops until valid input is given — no crashes on typos.
-
-        Args:
-            spieler_name: The name of the current player.
 
         Returns:
             True if player wants to roll, False if they want to skip their turn.
@@ -167,8 +149,7 @@ class KonsolenUI:
                     .lower()
                 )
             except (EOFError, KeyboardInterrupt):
-                # handle Ctrl+C and Ctrl+D gracefully
-                print("\n\nGame interrupted. Bye!")
+                self.console.print("\n\n[bold red]Game interrupted. Bye![/bold red]")
                 return False
 
             if eingabe in ("j", "y"):
@@ -176,7 +157,9 @@ class KonsolenUI:
             elif eingabe in ("n"):
                 return False
             else:
-                print("  ⚠️  Please enter 'j' (yes) or 'n' (no).")
+                self.console.print(
+                    "  [bold red]⚠️  Please enter 'j' (yes) or 'n' (no).[/bold red]"
+                )
 
     def _frage_ob_weitermachen(self) -> bool:
         """
@@ -191,7 +174,7 @@ class KonsolenUI:
                     input("\n🎲 Everyone passed. Continue? (j/n): ").strip().lower()
                 )
             except (EOFError, KeyboardInterrupt):
-                print("\n\nGame interrupted. Bye!")
+                self.console.print("\n\n[bold red]Game interrupted. Bye![/bold red]")
                 return False
 
             if eingabe in ("j", "y"):
@@ -199,12 +182,13 @@ class KonsolenUI:
             elif eingabe in ("n"):
                 return False
             else:
-                print("  ⚠️  Please enter 'j' (yes) or 'n' (no).")
+                self.console.print(
+                    "  [bold red]⚠️  Please enter 'j' (yes) or 'n' (no).[/bold red]"
+                )
 
     def frage_anzahl_spieler(self) -> int:
         """
         Ask how many players will play the game.
-        Loops until valid input is given (1-99).
 
         Returns:
             Number of players (1-99).
@@ -213,18 +197,17 @@ class KonsolenUI:
             try:
                 eingabe = input("\n👥 How many players? (1-99): ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n\nGame interrupted. Bye!")
+                self.console.print("\n\n[bold red]Game interrupted. Bye![/bold red]")
                 raise
 
             try:
                 anzahl = int(eingabe)
-                # Validate using the domain Value Object
                 AnzahlSpieler(anzahl)
                 return anzahl
             except ValueError as e:
-                print(f"  ⚠️  {e}")
+                self.console.print(f"  [bold red]⚠️  {e}[/bold red]")
             except TypeError as e:
-                print(f"  ⚠️  {e}")
+                self.console.print(f"  [bold red]⚠️  {e}[/bold red]")
 
     def frage_rundenlimit(self) -> int:
         """
@@ -239,7 +222,7 @@ class KonsolenUI:
                     "\n⏱️  How many rounds should the game run? (1-999): "
                 ).strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n\nGame interrupted. Bye!")
+                self.console.print("\n\n[bold red]Game interrupted. Bye![/bold red]")
                 raise
 
             try:
@@ -248,52 +231,47 @@ class KonsolenUI:
                     raise ValueError("Please enter a number between 1 and 999.")
                 return limit
             except ValueError as e:
-                print(f"  ⚠️  {e}")
+                self.console.print(f"  [bold red]⚠️  {e}[/bold red]")
 
     def frage_spielernamen(self, anzahl: int) -> list[str]:
         """
         Ask for the names of all players.
-        Loops per player until valid names are given (letters only, min 3 chars).
-
-        Args:
-            anzahl: Number of players to ask for.
 
         Returns:
             List of validated player names.
         """
         namen = []
-        print(f"\n👤 Enter names for {anzahl} player(s):")
+        self.console.print(f"\n👤 Enter names for {anzahl} player(s):")
 
         for i in range(1, anzahl + 1):
             while True:
                 try:
                     eingabe = input(f"  Player {i}: ").strip()
                 except (EOFError, KeyboardInterrupt):
-                    print("\n\nGame interrupted. Bye!")
+                    self.console.print(
+                        "\n\n[bold red]Game interrupted. Bye![/bold red]"
+                    )
                     raise
 
                 try:
-                    # Validate using the domain Value Object
                     spielername = Spielername(eingabe)
                     namen.append(spielername.name)
                     break
                 except ValueError as e:
-                    print(f"    ⚠️  {e}")
+                    self.console.print(f"    [bold red]⚠️  {e}[/bold red]")
                 except TypeError as e:
-                    print(f"    ⚠️  {e}")
+                    self.console.print(f"    [bold red]⚠️  {e}[/bold red]")
 
         return namen
 
     def _zeige_ergebnis(self, spieler_name: str, wert: int) -> None:
         """
         Display the result of a single throw for a specific player.
-
-        Args:
-            spieler_name: Name of the player who rolled.
-            wert: The result of the throw (1-6).
         """
         symbol = self.DICE_FACES.get(wert, "?")
-        print(f"\n  ▶ {spieler_name} rolled: {symbol}  {wert}")
+        self.console.print(
+            f"\n  ▶ [bold]{spieler_name}[/bold] rolled: {symbol}  [bold cyan]{wert}[/bold cyan]"
+        )
         self._zeige_statistik()
 
     def _zeige_zuginfo(self, spieler_name: str) -> None:
@@ -304,45 +282,33 @@ class KonsolenUI:
         current_round = service.get_current_round()
         round_limit = service.get_round_limit()
         limit_text = str(round_limit) if round_limit is not None else "∞"
-        print(f"\n🔄 Runde {current_round} / {limit_text}")
-        print(f"👉 {spieler_name} ist jetzt dran.")
+        self.console.print(f"\n🔄 Runde {current_round} / {limit_text}")
+        self.console.print(f"[bold cyan]👉 {spieler_name} ist jetzt dran.[/bold cyan]")
 
     def _zeige_statistik(self) -> None:
         """
         Display a formatted statistics table after every throw.
-
-        Acceptance Criteria:
-        - total throw count is exact
-        - each face shows correct frequency
-        - output is human-readable, not a raw data object
         """
         service = self._require_service()
         gesamt = service.gesamtwuerfe()
         stats = service.statistik()
 
-        # find the highest count to scale the bars proportionally
-        # if nobody has thrown yet, avoid division by zero
         max_count = max(stats.values()) if gesamt > 0 else 1
+        width = 38
 
-        width = 38  # total width of the box content
-
-        print(
+        self.console.print(
             f"\n  ┌─ Statistics after {gesamt} throw(s) {'─' * (width - 22 - len(str(gesamt)))}┐"
         )
 
         for face in range(1, 7):
             count = stats[face]
             symbol = self.DICE_FACES[face]
-
-            # filled part — proportional to this face's count
             filled = int((count / max_count) * 20) if max_count > 0 else 0
             empty = 20 - filled
-
             bar = self.BAR_CHAR * filled + "░" * empty
+            self.console.print(f"  │  {symbol} {face}:  {bar}  {count:>3}×  │")
 
-            print(f"  │  {symbol} {face}:  {bar}  {count:>3}×  │")
-
-        print(f"  └{'─' * (width + 3)}┘")
+        self.console.print(f"  └{'─' * (width + 3)}┘")
 
     def _zeige_abschluss(self) -> None:
         """
@@ -352,35 +318,40 @@ class KonsolenUI:
         gesamt = service.gesamtwuerfe()
 
         if gesamt == 0:
-            print("\n  No throws made. Come back soon! 👋")
+            self.console.print("\n  No throws made. Come back soon! 👋")
             return
 
         if service.ist_persistent():
-            print("\n  💾 Your game has been saved to spielstand.json")
+            self.console.print(
+                "\n  [bold blue]💾 Your game has been saved.[/bold blue]"
+            )
 
         # --- Ranking ---
         spielers = service.alle_spieler()
         spielers.sort(key=lambda s: service.punkte_fuer_spieler(s.id), reverse=True)
 
-        print("\n" + "=" * 45)
-        print("  🏆  FINAL RANKING")
-        print("=" * 45)
+        self.console.print("\n" + "=" * 45)
+        self.console.print("[bold yellow]  🏆  FINAL RANKING[/bold yellow]")
+        self.console.print("=" * 45)
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         for rang, spieler in enumerate(spielers, start=1):
             punkte = service.punkte_fuer_spieler(spieler.id)
             medal = medals.get(rang, "  ")
-            print(f"  {rang}. {medal} {spieler.name.name:<15} — {punkte:>4} pts")
+            color = "bold yellow" if rang == 1 else "white"
+            self.console.print(
+                f"  [{color}]{rang}. {medal} {spieler.name.name:<15} — {punkte:>4} pts[/{color}]"
+            )
 
-        print("=" * 45)
+        self.console.print("=" * 45)
 
         # --- Dice statistics ---
         stats = service.statistik()
         max_count = max(stats.values())
 
-        print("\n" + "=" * 45)
-        print(f"  📊  STATISTICS after {gesamt} throw(s)")
-        print("=" * 45)
+        self.console.print("\n" + "=" * 45)
+        self.console.print(f"  📊  STATISTICS after {gesamt} throw(s)")
+        self.console.print("=" * 45)
 
         for face in range(1, 7):
             count = stats[face]
@@ -388,21 +359,21 @@ class KonsolenUI:
             bar_width = int((count / max_count) * self.BAR_MAX_WIDTH)
             bar = self.BAR_CHAR * bar_width
             percentage = count / gesamt * 100
-            print(
+            self.console.print(
                 f"  {symbol} {face}: {bar:<{self.BAR_MAX_WIDTH}} {count:>4}×  ({percentage:4.1f}%)"
             )
 
         ideal = gesamt / 6
-        print("-" * 45)
-        print(f"  Ideal (uniform): each face ≈ {ideal:.1f}×")
-        print("=" * 45)
-        print("  Thanks for playing! 🎉")
+        self.console.print("-" * 45)
+        self.console.print(f"  Ideal (uniform): each face ≈ {ideal:.1f}×")
+        self.console.print("=" * 45)
+        self.console.print("[bold green]  Thanks for playing! 🎉[/bold green]")
 
     def frage_nach_format(self) -> str:
-        print("\n  💾 Choose save format:")
-        print("     j → JSON  (spielstand.json)")
-        print("     y → YAML  (spielstand.yaml)")
-        print("     x → XML   (spielstand.xml)")  # ← новый вариант
+        self.console.print("\n  [bold]💾 Choose save format:[/bold]")
+        self.console.print("     j → JSON  (spielstand.json)")
+        self.console.print("     y → YAML  (spielstand.yaml)")
+        self.console.print("     x → XML   (spielstand.xml)")
 
         while True:
             try:
@@ -414,26 +385,22 @@ class KonsolenUI:
                 return "json"
             elif eingabe == "y":
                 return "yaml"
-            elif eingabe == "x":  # ← новый вариант
+            elif eingabe == "x":
                 return "xml"
             else:
-                print("  ⚠️  Please enter 'j', 'y' or 'x'.")
+                self.console.print(
+                    "  [bold red]⚠️  Please enter 'j', 'y' or 'x'.[/bold red]"
+                )
 
     def frage_nach_spielstand(self, vorhandene_dateien: list[str]) -> str | None:
         """
         Show existing save files and ask player what to do.
-
-        Args:
-            vorhandene_dateien: list of save files found on disk.
-
-        Returns:
-            filename to load, or None if player wants a new game.
         """
-        print("\n  📁 Existing save files:")
-        print("     0 → New game")
+        self.console.print("\n  [bold]📁 Existing save files:[/bold]")
+        self.console.print("     0 → New game")
 
         for i, dateiname in enumerate(vorhandene_dateien, start=1):
-            print(f"     {i} → {dateiname}")
+            self.console.print(f"     {i} → {dateiname}")
 
         while True:
             try:
@@ -444,15 +411,15 @@ class KonsolenUI:
                 return None
 
             if eingabe == "0":
-                return None  # new game
+                return None
 
             if eingabe.isdigit():
                 index = int(eingabe) - 1
                 if 0 <= index < len(vorhandene_dateien):
-                    return vorhandene_dateien[index]  # return chosen filename
+                    return vorhandene_dateien[index]
 
-            print(
-                f"  ⚠️  Please enter a number between 0 and {len(vorhandene_dateien)}."
+            self.console.print(
+                f"  [bold red]⚠️  Please enter a number between 0 and {len(vorhandene_dateien)}.[/bold red]"
             )
 
     def frage_ob_fortsetzen(
@@ -465,22 +432,26 @@ class KonsolenUI:
         """
         Ask the player whether to resume a loaded game or start fresh.
         """
-        print("\n✅ Found a saved game ready to continue:")
-        print(f"  Players: {', '.join(spieler_namen)}")
+        self.console.print(
+            "\n[bold green]✅ Found a saved game ready to continue:[/bold green]"
+        )
+        self.console.print(f"  Players: {', '.join(spieler_namen)}")
         limit_text = str(rundenlimit) if rundenlimit is not None else "unlimited"
-        print(f"  Round limit: {limit_text}")
-        print(f"  Current round: {aktueller_runde} / {limit_text}")
-        print(f"  Next player: {naechster_spieler}")
+        self.console.print(f"  Round limit: {limit_text}")
+        self.console.print(f"  Current round: {aktueller_runde} / {limit_text}")
+        self.console.print(f"  Next player: {naechster_spieler}")
 
         while True:
             try:
                 eingabe = input("\n  Resume this saved game? (j/n): ").strip().lower()
             except (EOFError, KeyboardInterrupt):
-                print("\n\nGame interrupted. Bye!")
+                self.console.print("\n\n[bold red]Game interrupted. Bye![/bold red]")
                 return False
 
             if eingabe in ("j", "y"):
                 return True
             if eingabe in ("n", "no"):
                 return False
-            print("  ⚠️  Please enter 'j' (yes) or 'n' (no).")
+            self.console.print(
+                "  [bold red]⚠️  Please enter 'j' (yes) or 'n' (no).[/bold red]"
+            )
