@@ -3,6 +3,7 @@
 from application.services import WuerfelspieleService
 from domain.value_objects import AnzahlSpieler, Spielername
 from rich.console import Console
+from rich.table import Table
 
 
 class KonsolenUI:
@@ -329,19 +330,20 @@ class KonsolenUI:
         # --- Ranking ---
         spielers = service.alle_spieler()
         spielers.sort(key=lambda s: service.punkte_fuer_spieler(s.id), reverse=True)
-
-        self.console.print("\n" + "=" * 45)
-        self.console.print("[bold yellow]  🏆  FINAL RANKING[/bold yellow]")
-        self.console.print("=" * 45)
+        table = Table(title="🏆 Final Ranking")
+        table.add_column("Platz", style="bold")
+        table.add_column("Spieler")
+        table.add_column("Punkte", justify="right")
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         for rang, spieler in enumerate(spielers, start=1):
             punkte = service.punkte_fuer_spieler(spieler.id)
             medal = medals.get(rang, "  ")
             color = "bold yellow" if rang == 1 else "white"
-            self.console.print(
-                f"  [{color}]{rang}. {medal} {spieler.name.name:<15} — {punkte:>4} pts[/{color}]"
+            table.add_row(
+                f"{rang}", f"{medal} {spieler.name.name}", f"{punkte}", style=color
             )
+        self.console.print(table)
 
         self.console.print("=" * 45)
 
