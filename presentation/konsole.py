@@ -12,6 +12,51 @@ class KonsolenUI:
     BAR_CHAR = "█"
     BAR_MAX_WIDTH = 30
 
+    DICE_ART = {
+        1: [
+            "┌─────────┐",
+            "│         │",
+            "│    ●    │",
+            "│         │",
+            "└─────────┘",
+        ],
+        2: [
+            "┌─────────┐",
+            "│ ●       │",
+            "│         │",
+            "│       ● │",
+            "└─────────┘",
+        ],
+        3: [
+            "┌─────────┐",
+            "│ ●       │",
+            "│    ●    │",
+            "│       ● │",
+            "└─────────┘",
+        ],
+        4: [
+            "┌─────────┐",
+            "│ ●     ● │",
+            "│         │",
+            "│ ●     ● │",
+            "└─────────┘",
+        ],
+        5: [
+            "┌─────────┐",
+            "│ ●     ● │",
+            "│    ●    │",
+            "│ ●     ● │",
+            "└─────────┘",
+        ],
+        6: [
+            "┌─────────┐",
+            "│ ●     ● │",
+            "│ ●     ● │",
+            "│ ●     ● │",
+            "└─────────┘",
+        ],
+    }
+
     def __init__(self, service: WuerfelspieleService | None = None):
         self._service: WuerfelspieleService | None = service
 
@@ -269,10 +314,11 @@ class KonsolenUI:
         """
         Display the result of a single throw for a specific player.
         """
-        symbol = self.DICE_FACES.get(wert, "?")
-        self.console.print(
-            f"\n  ▶ [bold]{spieler_name}[/bold] rolled: {symbol}  [bold cyan]{wert}[/bold cyan]"
-        )
+        art = self.DICE_ART.get(wert, "?")
+        self.console.print(f"  ▶ [bold]{spieler_name}[/bold] rolled:")
+
+        for line in art:
+            self.console.print(f"  {line}")
         self._zeige_statistik()
 
     def _zeige_zuginfo(self, spieler_name: str) -> None:
